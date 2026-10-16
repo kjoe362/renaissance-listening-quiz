@@ -1,0 +1,474 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Renaissance Listening Quiz</title>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  padding:20px;
+  background:#10131c;
+  color:#fff;
+  font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;
+}
+main{max-width:650px;margin:auto}
+h1{font-size:26px;margin-bottom:8px}
+p{color:#b8c1d3;line-height:1.5}
+.panel{
+  background:#1b2231;
+  padding:18px;
+  border-radius:15px;
+  margin-top:15px;
+}
+.screen{
+  position:relative;
+  height:210px;
+  background:#000;
+  border-radius:12px;
+  overflow:hidden;
+}
+#player{width:100%;height:100%}
+.cover{
+  position:absolute;
+  inset:0;
+  background:#000;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  pointer-events:none;
+  color:#aebbd0;
+  font-size:20px;
+}
+button{
+  background:#3479e7;
+  color:white;
+  border:0;
+  border-radius:9px;
+  padding:13px;
+  margin:5px 3px;
+  font-size:15px;
+  font-weight:600;
+  cursor:pointer;
+}
+button:disabled{opacity:.4}
+input{
+  width:100%;
+  background:#101622;
+  color:white;
+  border:1px solid #58647c;
+  border-radius:9px;
+  padding:14px;
+  font-size:16px;
+}
+#answer{
+  padding:15px;
+  background:#111827;
+  border-radius:10px;
+  line-height:1.7;
+  overflow-wrap:anywhere;
+}
+.good{background:#267a57}
+.bad{background:#a34148}
+a{color:#9bc0ff}
+.controls{margin:12px 0}
+#score{font-weight:bold}
+</style>
+</head>
+
+<body>
+<main>
+
+<h1>🎧 Renaissance Listening Quiz</h1>
+
+<p>
+Listen to a random Renaissance recording.
+The video and title stay hidden until you reveal the answer.
+</p>
+
+<div class="panel">
+
+<p id="status">Connecting to YouTube...</p>
+
+<div class="screen">
+  <div id="player"></div>
+  <div class="cover">
+    ♫<br>
+    BLIND LISTENING MODE
+  </div>
+</div>
+
+<div class="controls">
+  <button onclick="startQuiz()">▶ Play / Start</button>
+  <button onclick="pauseQuiz()">⏯ Pause / Resume</button>
+  <button onclick="restartQuiz()">↺ Replay</button>
+  <button onclick="nextTrack()">⏭ Next</button>
+</div>
+
+<p>Which piece is playing?</p>
+
+<input
+  id="guess"
+  placeholder="Title and composer"
+  autocomplete="off"
+>
+
+<p>
+  <button onclick="reveal()">Reveal Answer</button>
+</p>
+
+<div id="answer">Answer hidden.</div>
+
+<div class="controls">
+  <button class="good" onclick="grade(true)">
+    ✓ Correct
+  </button>
+
+  <button class="bad" onclick="grade(false)">
+    ✗ Incorrect
+  </button>
+</div>
+
+<p id="score">
+Correct: 0 | Incorrect: 0
+</p>
+
+</div>
+
+<p>
+YouTube playback requires an internet connection.
+If the player fails to load, refresh Safari.
+</p>
+
+</main>
+
+<script>
+const playlistId =
+  "PLdA_y8ccjOuAlXAizS1JNZZWv_gk78vjv";
+
+let player;
+let tracks = [];
+let current = -1;
+let previous = -1;
+let misses = {};
+
+let correct = 0;
+let incorrect = 0;
+
+let revealed = false;
+let ready = false;
+let playing = false;
+
+function status(message){
+  document.getElementById("status").textContent =
+    message;
+}
+
+function onYouTubeIframeAPIReady(){
+
+  player = new YT.Player("player",{
+
+    height:"210",
+    width:"100%",
+
+    playerVars:{
+      listType:"playlist",
+      list:playlistId,
+      controls:0,
+      playsinline:1,
+      rel:0,
+      disablekb:1
+    },
+
+    events:{
+
+      onReady:function(){
+
+        ready = true;
+
+        status("Ready. Tap Play / Start.");
+
+        player.cuePlaylist({
+          listType:"playlist",
+          list:playlistId
+        });
+
+      },
+
+      onStateChange:function(e){
+
+        if(player.getPlaylist){
+
+          let found = player.getPlaylist();
+
+          if(found && found.length){
+            tracks = found;
+          }
+
+        }
+
+        if(e.data === YT.PlayerState.PLAYING){
+          playing = true;
+        }
+
+        if(e.data === YT.PlayerState.PAUSED ||
+           e.data === YT.PlayerState.ENDED){
+          playing = false;
+        }
+
+      },
+
+      onError:function(e){
+        status(
+          "YouTube error " + e.data +
+          ". Try Next."
+        );
+      }
+
+    }
+
+  });
+
+}
+
+function chooseTrack(){
+
+  let pool = [];
+
+  for(let i=0;i<tracks.length;i++){
+
+    if(i === previous && tracks.length > 1){
+      continue;
+    }
+
+    let weight =
+      1 + Math.min(3,misses[tracks[i]] || 0);
+
+    for(let j=0;j<weight;j++){
+      pool.push(i);
+    }
+
+  }
+
+  if(!pool.length){
+    return 0;
+  }
+
+  return pool[
+    Math.floor(Math.random()*pool.length)
+  ];
+
+}
+
+function startQuiz(){
+
+  if(!ready){
+    status("Still connecting. Refresh Safari.");
+    return;
+  }
+
+  if(current < 0 || revealed){
+    nextTrack();
+  }else{
+    player.playVideo();
+  }
+
+}
+
+function nextTrack(){
+
+  if(!ready){
+    status("YouTube is still loading.");
+    return;
+  }
+
+  let found = player.getPlaylist();
+
+  if(found && found.length){
+    tracks = found;
+  }
+
+  if(!tracks.length){
+
+    status(
+      "Playlist is loading. Tap Play again shortly."
+    );
+
+    player.playVideo();
+    return;
+  }
+
+  previous = current;
+  current = chooseTrack();
+
+  revealed = false;
+  playing = false;
+
+  document.getElementById("guess").value = "";
+
+  document.getElementById("answer").textContent =
+    "Answer hidden.";
+
+  status(
+    "Track " + (correct + incorrect + 1) +
+    " — Listening..."
+  );
+
+  // IMPORTANT:
+  // Switch within the already-loaded playlist.
+  // Do not reload the entire playlist.
+
+  player.playVideoAt(current);
+
+}
+
+function pauseQuiz(){
+
+  if(!ready){
+    return;
+  }
+
+  if(playing){
+
+    player.pauseVideo();
+    playing = false;
+
+  }else{
+
+    player.playVideo();
+    playing = true;
+
+  }
+
+}
+
+function restartQuiz(){
+
+  if(!ready){
+    return;
+  }
+
+  player.seekTo(0,true);
+  player.playVideo();
+
+}
+
+function reveal(){
+
+  if(current < 0){
+    status("Start a recording first.");
+    return;
+  }
+
+  revealed = true;
+
+  let data = player.getVideoData();
+
+  let title =
+    data.title || "Title unavailable";
+
+  let video = tracks[current];
+
+  let guess =
+    document.getElementById("guess").value;
+
+  let box = document.getElementById("answer");
+
+  box.textContent = "";
+
+  let a = document.createElement("div");
+
+  a.textContent =
+    "Your guess: " + (guess || "(blank)");
+
+  let b = document.createElement("div");
+
+  b.textContent =
+    "Actual title: " + title;
+
+  let link = document.createElement("a");
+
+  link.href =
+    "https://youtube.com/watch?v=" +
+    encodeURIComponent(video);
+
+  link.target = "_blank";
+
+  link.rel = "noopener noreferrer";
+
+  link.textContent =
+    "Open original recording";
+
+  box.append(a,b,link);
+
+  status(
+    "Answer revealed — grade yourself."
+  );
+
+}
+
+function grade(ok){
+
+  if(!revealed){
+
+    status(
+      "Reveal the answer before grading."
+    );
+
+    return;
+  }
+
+  if(ok){
+
+    correct++;
+
+  }else{
+
+    incorrect++;
+
+    misses[tracks[current]] =
+      (misses[tracks[current]] || 0) + 1;
+
+  }
+
+  document.getElementById("score").textContent =
+    "Correct: " + correct +
+    " | Incorrect: " + incorrect;
+
+  nextTrack();
+
+}
+
+let script = document.createElement("script");
+
+script.src =
+  "https://www.youtube.com/iframe_api";
+
+script.onerror = function(){
+
+  status(
+    "Unable to load YouTube. Check connection."
+  );
+
+};
+
+document.head.appendChild(script);
+
+setTimeout(function(){
+
+  if(!ready){
+
+    status(
+      "YouTube is taking too long. Refresh Safari."
+    );
+
+  }
+
+},12000);
+
+</script>
+</body>
+</html>
