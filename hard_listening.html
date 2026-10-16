@@ -1,0 +1,462 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Renaissance Listening — Hard Six</title>
+<style>
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #0d1119;
+  color: #f3f5fa;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 24px 14px; }
+main { max-width: 780px; margin: auto; }
+h1 { font-size: 1.8rem; margin-bottom: 8px; }
+p { line-height: 1.5; }
+.muted { color: #a8b3c5; }
+.panel {
+  background: #171e2b;
+  border: 1px solid #2b364a;
+  border-radius: 16px;
+  padding: 20px;
+  margin: 18px 0;
+}
+.screen {
+  position: relative;
+  aspect-ratio: 16/9;
+  background: black;
+  border-radius: 12px;
+  overflow: hidden;
+}
+#player { width: 100%; height: 100%; pointer-events: none; }
+.curtain {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  display: grid;
+  place-items: center;
+  z-index: 3;
+  color: #a8b3c5;
+  text-align: center;
+}
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 15px 0;
+}
+button {
+  border: 0;
+  border-radius: 10px;
+  padding: 12px 15px;
+  background: #354158;
+  color: white;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:disabled { opacity: .4; cursor: not-allowed; }
+.primary { background: #4586ed; }
+.good { background: #206047; }
+.bad { background: #743b43; }
+input {
+  width: 100%;
+  background: #0d1420;
+  border: 1px solid #44516a;
+  border-radius: 10px;
+  color: white;
+  font: inherit;
+  padding: 14px;
+}
+label { display: block; margin: 12px 0 8px; }
+.result {
+  background: #0d1420;
+  border-radius: 10px;
+  padding: 14px;
+  line-height: 1.7;
+}
+.stat {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.small { font-size: 13px; }
+a { color: #8db7ff; }
+</style>
+</head>
+<body>
+<main>
+<h1>🎧 Renaissance Listening — Hard Six</h1>
+<p class="muted">
+Practice only your six hardest Renaissance pieces.
+Each excerpt starts at a random point. Missed pieces
+appear more frequently.
+</p>
+
+<section class="panel">
+<div class="stat">
+<span id="status">Connecting to YouTube…</span>
+<span id="stats">Correct: 0 · Missed: 0</span>
+</div>
+
+<div class="screen">
+  <div id="player"></div>
+  <div class="curtain">♫<br>BLIND LISTENING MODE<br>Title and video hidden</div>
+</div>
+
+<div class="buttons">
+  <button class="primary" id="start" disabled>▶ Start</button>
+  <button id="pause" disabled>⏸ Pause</button>
+  <button id="restart" disabled>↺ Replay excerpt</button>
+  <button id="next" disabled>⏭ Next</button>
+</div>
+
+<label for="guess">Which piece and composer?</label>
+<input id="guess" placeholder="Enter your guess…" autocomplete="off">
+
+<div class="buttons">
+  <button class="primary" id="reveal" disabled>Reveal answer</button>
+  <button class="good" id="correct" disabled>✓ Correct</button>
+  <button class="bad" id="wrong" disabled>✗ Missed</button>
+</div>
+
+<div class="result" id="answer">
+Listen first, then reveal the answer.
+</div>
+</section>
+
+<section class="panel">
+<strong>Practice settings</strong>
+<p class="muted small">
+Six target pieces · Random playback order · Random excerpt
+positions · Missed-track weighting.
+</p>
+<p id="count" class="muted small">Checking playlist…</p>
+<p class="muted small">
+YouTube must allow the recordings to play in embedded players.
+Some iPhones may require an extra tap to start audio.
+</p>
+</section>
+</main>
+
+<script>
+const PLAYLIST = "PLdA_y8ccjOuAlXAizS1JNZZWv_gk78vjv";
+
+// The six pieces and their expected composers.
+const TARGETS = [
+  {
+    title: "O magnum mysterium",
+    composer: "Tomás Luis de Victoria",
+    match: /o magnum mysterium/i
+  },
+  {
+    title: "Da le belle contrade",
+    composer: "Cipriano de Rore",
+    match: /da le belle contrade|dalle belle contrade/i
+  },
+  {
+    title: "Missa Se la face ay pale: Gloria",
+    composer: "Guillaume Dufay",
+    match: /se la face ay pale|se la face ay palle/i
+  },
+  {
+    title: "Missa Papae Marcelli: Credo",
+    composer: "Giovanni Palestrina",
+    match: /papae marcelli/i
+  },
+  {
+    title: "Missa Pange lingua: Credo",
+    composer: "Josquin des Prez",
+    match: /pange lingua/i
+  },
+  {
+    title: "Innsbruck, ich muss dich lassen",
+    composer: "Heinrich Isaac",
+    match: /innsbruck/i
+  }
+];
+
+const el = id => document.getElementById(id);
+const status = message => el("status").textContent = message;
+const enable = (id, enabled = true) =>
+  el(id).disabled = !enabled;
+
+let player;
+let playlistIds = [];
+let available = [];
+let current = null;
+let previousId = null;
+let excerptStart = 0;
+let needsSeek = false;
+let revealed = false;
+let correct = 0;
+let wrong = 0;
+let misses = {};
+let ready = false;
+let loading = false;
+
+// YouTube playlist entries do not always expose their titles
+// before playback. We scan the playlist once to identify them.
+
+window.onYouTubeIframeAPIReady = () => {
+  player = new YT.Player("player", {
+    width: "100%",
+    height: "100%",
+    playerVars: {
+      controls: 0,
+      disablekb: 1,
+      playsinline: 1,
+      rel: 0
+    },
+    events: {
+      onReady: () => {
+        ready = true;
+        status("Connected. Press Start to scan the playlist.");
+        enable("start");
+      },
+      onStateChange: handleState,
+      onError: event => {
+        status("YouTube error " + event.data);
+      }
+    }
+  });
+};
+
+const script = document.createElement("script");
+script.src = "https://www.youtube.com/iframe_api";
+document.head.appendChild(script);
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function scanPlaylist() {
+  if (loading) return;
+  loading = true;
+  status("Loading playlist…");
+
+  player.cuePlaylist({
+    listType: "playlist",
+    list: PLAYLIST,
+    index: 0
+  });
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await sleep(350);
+    playlistIds = player.getPlaylist?.() || [];
+    if (playlistIds.length) break;
+  }
+
+  if (!playlistIds.length) {
+    loading = false;
+    status("Could not load playlist. Check YouTube restrictions.");
+    return;
+  }
+
+  available = [];
+  const found = new Set();
+
+  for (let i = 0; i < playlistIds.length; i++) {
+    status(`Checking recording ${i + 1}/${playlistIds.length}…`);
+
+    player.cueVideoById(playlistIds[i]);
+
+    let title = "";
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await sleep(200);
+      const data = player.getVideoData?.() || {};
+      if (data.video_id === playlistIds[i] && data.title) {
+        title = data.title;
+        break;
+      }
+    }
+
+    const target = TARGETS.find(t => t.match.test(title));
+
+    if (target && !found.has(target.title)) {
+      found.add(target.title);
+      available.push({
+        id: playlistIds[i],
+        title: target.title,
+        composer: target.composer
+      });
+    }
+  }
+
+  loading = false;
+  el("count").textContent =
+    `Found ${available.length} of 6 target recordings.`;
+
+  if (!available.length) {
+    status("No matching recordings found. YouTube may block title lookup.");
+    return;
+  }
+
+  status(`Ready — ${available.length} target recordings.`);
+  enable("next");
+  newTrack();
+}
+
+function chooseTrack() {
+  const choices = available.filter(
+    t => t.id !== previousId
+  );
+  const pool = choices.length ? choices : available;
+  const weighted = [];
+
+  for (const track of pool) {
+    const weight = 1 + Math.min(4, misses[track.id] || 0);
+    for (let i = 0; i < weight; i++) weighted.push(track);
+  }
+
+  return weighted[Math.floor(Math.random() * weighted.length)];
+}
+
+function newTrack() {
+  if (!available.length) return;
+
+  current = chooseTrack();
+  previousId = current.id;
+  excerptStart = 0;
+  needsSeek = true;
+  revealed = false;
+
+  el("guess").value = "";
+  el("answer").textContent = "Listen, then reveal your answer.";
+  el("pause").textContent = "⏸ Pause";
+
+  enable("pause");
+  enable("restart");
+  enable("next");
+  enable("reveal");
+  enable("correct", false);
+  enable("wrong", false);
+
+  status("Loading random excerpt…");
+  player.loadVideoById(current.id);
+}
+
+function handleState(event) {
+  if (
+    event.data === YT.PlayerState.PLAYING &&
+    needsSeek &&
+    current
+  ) {
+    const video = player.getVideoData?.() || {};
+
+    if (video.video_id !== current.id) return;
+
+    const duration = Number(player.getDuration?.()) || 0;
+
+    if (duration > 0) {
+      needsSeek = false;
+
+      const earliest = Math.min(12, duration * 0.1);
+      const latest = Math.max(
+        earliest,
+        duration - Math.max(15, duration * 0.2)
+      );
+
+      excerptStart = Math.floor(
+        earliest + Math.random() * (latest - earliest)
+      );
+
+      if (excerptStart > 0) {
+        player.seekTo(excerptStart, true);
+      }
+
+      status("Listening — hidden random excerpt");
+    }
+  }
+}
+
+el("start").onclick = () => {
+  if (!available.length) {
+    scanPlaylist();
+  } else if (!current || revealed) {
+    newTrack();
+  } else {
+    player.playVideo();
+  }
+};
+
+el("next").onclick = newTrack;
+
+el("pause").onclick = () => {
+  if (player.getPlayerState() === YT.PlayerState.PLAYING) {
+    player.pauseVideo();
+    el("pause").textContent = "▶ Resume";
+  } else {
+    player.playVideo();
+    el("pause").textContent = "⏸ Pause";
+  }
+};
+
+el("restart").onclick = () => {
+  if (!current) return;
+  player.seekTo(excerptStart, true);
+  player.playVideo();
+};
+
+el("reveal").onclick = () => {
+  if (!current) return;
+
+  revealed = true;
+  el("answer").innerHTML = "";
+
+  const yourGuess = document.createElement("div");
+  yourGuess.textContent =
+    "Your guess: " + (el("guess").value || "(none)");
+
+  const solution = document.createElement("div");
+  solution.textContent =
+    "Answer: " + current.title + " — " + current.composer;
+
+  const link = document.createElement("a");
+  link.href = "https://www.youtube.com/watch?v=" +
+    encodeURIComponent(current.id);
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "Open recording on YouTube";
+
+  el("answer").append(yourGuess, solution, link);
+
+  enable("reveal", false);
+  enable("correct");
+  enable("wrong");
+  status("Answer revealed — grade yourself");
+};
+
+function grade(isCorrect) {
+  if (!revealed || !current) return;
+
+  if (isCorrect) {
+    correct++;
+  } else {
+    wrong++;
+    misses[current.id] = (misses[current.id] || 0) + 1;
+  }
+
+  el("stats").textContent =
+    `Correct: ${correct} · Missed: ${wrong}`;
+
+  newTrack();
+}
+
+el("correct").onclick = () => grade(true);
+el("wrong").onclick = () => grade(false);
+
+el("guess").addEventListener("keydown", event => {
+  if (event.key === "Enter" && !el("reveal").disabled) {
+    el("reveal").click();
+  }
+});
+</script>
+</body>
+</html>
